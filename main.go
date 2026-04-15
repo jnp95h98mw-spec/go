@@ -246,6 +246,18 @@ const pageTpl = `<!doctype html>
     .toast.show { opacity:1; transform:translateY(0); }
     .done-btn{border-color:rgba(89,213,143,.35);}
     .delete-btn{border-color:rgba(255,94,125,.35);}
+    .beer-bottle {
+      position: fixed;
+      left: 20px;
+      top: 20px;
+      z-index: 1;
+      font-size: 48px;
+      user-select: none;
+      cursor: grab;
+      filter: drop-shadow(0 8px 18px rgba(0,0,0,.35));
+      transition: transform .15s ease;
+    }
+    .beer-bottle:active { cursor: grabbing; transform: scale(1.08); }
     @keyframes panelIn { from { opacity:0; transform:translateY(8px);} to {opacity:1; transform:none;} }
     @keyframes itemIn { from { opacity:0; transform:translateY(6px);} to {opacity:1; transform:none;} }
     @media (max-width: 900px) { .layout { grid-template-columns:1fr; } .sidebar{border-right:none;border-bottom:1px solid var(--line);} .add{grid-template-columns:1fr 1fr;} }
@@ -359,6 +371,7 @@ const pageTpl = `<!doctype html>
       </div>
     </main>
   </div>
+  <div id="beerBottle" class="beer-bottle" title="Потяни или кликни меня">🍾</div>
   <div id="toast" class="toast">Сделано ⚡</div>
   <script>
     const toast = document.getElementById('toast');
@@ -368,6 +381,88 @@ const pageTpl = `<!doctype html>
         setTimeout(() => toast.classList.remove('show'), 900);
       });
     });
+
+    // Интерактивная бутылка на фоне: случайное направление, отскоки от краёв, drag-and-drop.
+    const bottle = document.getElementById('beerBottle');
+    let bx = 40;
+    let by = 40;
+    let vx = (Math.random() * 2 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
+    let vy = (Math.random() * 2 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+    let spin = 0;
+
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const randSpeed = () => (Math.random() * 2.5 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
+
+    function positionBottle() {
+      bottle.style.left = bx + 'px';
+      bottle.style.top = by + 'px';
+      bottle.style.transform = 'rotate(' + spin + 'deg)';
+    }
+
+    function tick() {
+      if (!dragging) {
+        bx += vx;
+        by += vy;
+        spin += (Math.abs(vx) + Math.abs(vy)) * 0.1;
+
+        const maxX = window.innerWidth - bottle.offsetWidth - 4;
+        const maxY = window.innerHeight - bottle.offsetHeight - 4;
+
+        if (bx <= 0 || bx >= maxX) {
+          vx *= -1;
+          vx += (Math.random() - 0.5) * 0.6;
+          bx = clamp(bx, 0, maxX);
+        }
+        if (by <= 0 || by >= maxY) {
+          vy *= -1;
+          vy += (Math.random() - 0.5) * 0.6;
+          by = clamp(by, 0, maxY);
+        }
+        positionBottle();
+      }
+      requestAnimationFrame(tick);
+    }
+
+    bottle.addEventListener('click', () => {
+      vx = randSpeed();
+      vy = randSpeed();
+      toast.textContent = 'Новый вектор 🍾';
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+        toast.textContent = 'Сделано ⚡';
+      }, 900);
+    });
+
+    bottle.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      bottle.setPointerCapture(e.pointerId);
+      offsetX = e.clientX - bx;
+      offsetY = e.clientY - by;
+    });
+    bottle.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      bx = clamp(e.clientX - offsetX, 0, window.innerWidth - bottle.offsetWidth - 4);
+      by = clamp(e.clientY - offsetY, 0, window.innerHeight - bottle.offsetHeight - 4);
+      positionBottle();
+    });
+    bottle.addEventListener('pointerup', () => {
+      dragging = false;
+      vx = randSpeed();
+      vy = randSpeed();
+    });
+
+    window.addEventListener('resize', () => {
+      bx = clamp(bx, 0, window.innerWidth - bottle.offsetWidth - 4);
+      by = clamp(by, 0, window.innerHeight - bottle.offsetHeight - 4);
+      positionBottle();
+    });
+
+    positionBottle();
+    requestAnimationFrame(tick);
   </script>
 </body>
 </html>`
