@@ -17,19 +17,23 @@ import (
 )
 
 type Todo struct {
-	ID        int       `json:"id"`
-	Text      string    `json:"text"`
-	Note      string    `json:"note"`
-	Labels    []string  `json:"labels"`
-	Project   string    `json:"project"`
-	Priority  int       `json:"priority"`
-	DueDate   string    `json:"due_date"`
-	Done      bool      `json:"done"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int       `json:"id"`
+	Text       string    `json:"text"`
+	Note       string    `json:"note"`
+	Labels     []string  `json:"labels"`
+	Project    string    `json:"project"`
+	Section    string    `json:"section"`
+	ParentID   int       `json:"parent_id"`
+	Priority   int       `json:"priority"`
+	DueDate    string    `json:"due_date"`
+	Recurrence string    `json:"recurrence"`
+	Done       bool      `json:"done"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type Storage struct {
-	Todos []Todo `json:"todos"`
+	Todos    []Todo   `json:"todos"`
+	Activity []string `json:"activity"`
 }
 
 var storeMu sync.Mutex
@@ -298,6 +302,16 @@ const pageTpl = `<!doctype html>
           <span class="chip">Активные: <strong>{{add .Counts.Inbox .Counts.Today .Counts.Upcoming}}</strong></span>
           <span class="chip">Текущий вид: <span class="pill">{{.View}}</span></span>
         </div>
+        {{if .Activity}}
+        <details style="margin-bottom:.8rem;">
+          <summary style="cursor:pointer;">Лента активности</summary>
+          <ul style="margin-top:.5rem;">
+            {{range .Activity}}
+            <li class="sub">{{.}}</li>
+            {{end}}
+          </ul>
+        </details>
+        {{end}}
         <form class="add" method="get" action="/" style="margin-bottom:.9rem;grid-template-columns:1fr 150px;">
           <input type="hidden" name="view" value="{{.View}}" />
           <input type="text" name="q" value="{{.Query}}" placeholder="Поиск задач..." />
@@ -318,6 +332,9 @@ const pageTpl = `<!doctype html>
           </div>
           <input type="text" name="labels" placeholder="Метки через запятую: work,urgent" />
           <input type="text" name="note" placeholder="Описание / комментарий" />
+          <input type="text" name="section" placeholder="Секция (например backlog)" />
+          <input type="number" name="parent_id" placeholder="ID родителя (подзадача)" min="0" />
+          <input type="text" name="recurrence" placeholder="Повтор: daily | weekly | monthly" />
           <input type="hidden" name="back" value="{{.BackURL}}" />
         </form>
 
@@ -333,7 +350,7 @@ const pageTpl = `<!doctype html>
               </form>
               <div>
                 <div class="title {{if .Done}}done{{end}}">{{.Text}}</div>
-                <div class="sub"><span class="prio p{{.Priority}}">P{{.Priority}}</span>Проект: {{if .Project}}{{.Project}}{{else}}inbox{{end}}{{if .DueDate}} · Срок: {{.DueDate}}{{end}}</div>
+                <div class="sub"><span class="prio p{{.Priority}}">P{{.Priority}}</span>Проект: {{if .Project}}{{.Project}}{{else}}inbox{{end}}{{if .Section}} · Секция: {{.Section}}{{end}}{{if .DueDate}} · Срок: {{.DueDate}}{{end}}{{if .Recurrence}} · 🔁 {{.Recurrence}}{{end}}{{if gt .ParentID 0}} · Подзадача #{{.ParentID}}{{end}}</div>
                 {{if .Labels}}<div class="sub">🏷️ {{range $i, $l := .Labels}}{{if $i}}, {{end}}{{$l}}{{end}}</div>{{end}}
                 {{if .Note}}<div class="sub">📝 {{.Note}}</div>{{end}}
               </div>
@@ -346,6 +363,8 @@ const pageTpl = `<!doctype html>
                   <input type="hidden" name="back" value="{{$.BackURL}}" />
                   <input type="text" name="text" value="{{.Text}}" required />
                   <input type="text" name="project" value="{{.Project}}" placeholder="Проект" />
+                  <input type="text" name="section" value="{{.Section}}" placeholder="Секция" />
+                  <input type="number" name="parent_id" value="{{.ParentID}}" min="0" placeholder="ID родителя" />
                   <input type="date" name="due_date" value="{{.DueDate}}" />
                   <select name="priority">
                     <option value="4" {{if eq .Priority 4}}selected{{end}}>P4</option>
@@ -355,6 +374,7 @@ const pageTpl = `<!doctype html>
                   </select>
                   <input type="text" name="labels" value="{{join .Labels ", "}}" placeholder="Метки через запятую" />
                   <input type="text" name="note" value="{{.Note}}" placeholder="Описание" />
+                  <input type="text" name="recurrence" value="{{.Recurrence}}" placeholder="Повтор: daily | weekly | monthly" />
                   <button type="submit">Сохранить</button>
                 </form>
               </details>
@@ -630,6 +650,7 @@ func runWeb(path string, s *Storage, port string) error {
 
 		storeMu.Lock()
 		all := append([]Todo(nil), s.Todos...)
+		activities := append([]string(nil), s.Activity...)
 		storeMu.Unlock()
 		view := strings.TrimSpace(r.URL.Query().Get("view"))
 		if view == "" {
@@ -651,6 +672,7 @@ func runWeb(path string, s *Storage, port string) error {
 			Projects      []string
 			Title         string
 			BackURL       string
+			Activity      []string
 			Counts        ViewCounts
 			ProjectCounts map[string]int
 		}{
@@ -663,6 +685,7 @@ func runWeb(path string, s *Storage, port string) error {
 			Projects:      collectProjects(all),
 			Title:         resolveTitle(view, projectFilter),
 			BackURL:       currentBackURL(view, projectFilter, showDone, query),
+			Activity:      firstN(activities, 8),
 			Counts:        counts,
 			ProjectCounts: projectCounts,
 		}
@@ -683,22 +706,30 @@ func runWeb(path string, s *Storage, port string) error {
 		priority := parsePriority(r.FormValue("priority"))
 		note := strings.TrimSpace(r.FormValue("note"))
 		labels := parseLabels(r.FormValue("labels"))
+		section := strings.TrimSpace(r.FormValue("section"))
+		parentID, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("parent_id")))
+		recurrence := normalizeRecurrence(r.FormValue("recurrence"))
 		if text == "" {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
 		dueDate = normalizeDueDate(dueDate)
 		storeMu.Lock()
+		newID := nextID(s.Todos)
 		s.Todos = append(s.Todos, Todo{
-			ID:        nextID(s.Todos),
-			Text:      text,
-			Note:      note,
-			Labels:    labels,
-			Project:   normalizeProject(project),
-			Priority:  priority,
-			DueDate:   dueDate,
-			CreatedAt: time.Now(),
+			ID:         newID,
+			Text:       text,
+			Note:       note,
+			Labels:     labels,
+			Project:    normalizeProject(project),
+			Section:    strings.TrimSpace(section),
+			ParentID:   maxInt(parentID, 0),
+			Priority:   priority,
+			DueDate:    dueDate,
+			Recurrence: recurrence,
+			CreatedAt:  time.Now(),
 		})
+		appendActivity(s, fmt.Sprintf("➕ Добавлена задача #%d: %s", newID, text))
 		_ = save(path, s)
 		storeMu.Unlock()
 		http.Redirect(w, r, backURL(r), http.StatusSeeOther)
@@ -715,6 +746,16 @@ func runWeb(path string, s *Storage, port string) error {
 			for i := range s.Todos {
 				if s.Todos[i].ID == id {
 					s.Todos[i].Done = !s.Todos[i].Done
+					if s.Todos[i].Done {
+						appendActivity(s, fmt.Sprintf("✅ Выполнена задача #%d: %s", s.Todos[i].ID, s.Todos[i].Text))
+						if s.Todos[i].Recurrence != "" && s.Todos[i].DueDate != "" {
+							if next, ok := advanceDueDate(s.Todos[i].DueDate, s.Todos[i].Recurrence); ok {
+								s.Todos[i].DueDate = next
+								s.Todos[i].Done = false
+								appendActivity(s, fmt.Sprintf("🔁 Рекуррентная задача #%d перенесена на %s", s.Todos[i].ID, next))
+							}
+						}
+					}
 					break
 				}
 			}
@@ -756,10 +797,16 @@ func runWeb(path string, s *Storage, port string) error {
 					s.Todos[i].Text = text
 				}
 				s.Todos[i].Project = normalizeProject(r.FormValue("project"))
+				s.Todos[i].Section = strings.TrimSpace(r.FormValue("section"))
 				s.Todos[i].Note = strings.TrimSpace(r.FormValue("note"))
 				s.Todos[i].Labels = parseLabels(r.FormValue("labels"))
 				s.Todos[i].Priority = parsePriority(r.FormValue("priority"))
 				s.Todos[i].DueDate = normalizeDueDate(r.FormValue("due_date"))
+				s.Todos[i].Recurrence = normalizeRecurrence(r.FormValue("recurrence"))
+				if parentID, err := strconv.Atoi(strings.TrimSpace(r.FormValue("parent_id"))); err == nil {
+					s.Todos[i].ParentID = maxInt(parentID, 0)
+				}
+				appendActivity(s, fmt.Sprintf("✏️ Обновлена задача #%d", s.Todos[i].ID))
 				break
 			}
 			_ = save(path, s)
@@ -976,6 +1023,62 @@ func normalizeDueDate(raw string) string {
 		return ""
 	}
 	return raw
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func normalizeRecurrence(raw string) string {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	switch v {
+	case "daily", "weekly", "monthly":
+		return v
+	default:
+		return ""
+	}
+}
+
+func advanceDueDate(current, recurrence string) (string, bool) {
+	dt, err := time.Parse("2006-01-02", current)
+	if err != nil {
+		return "", false
+	}
+	switch recurrence {
+	case "daily":
+		dt = dt.AddDate(0, 0, 1)
+	case "weekly":
+		dt = dt.AddDate(0, 0, 7)
+	case "monthly":
+		dt = dt.AddDate(0, 1, 0)
+	default:
+		return "", false
+	}
+	return dt.Format("2006-01-02"), true
+}
+
+func appendActivity(s *Storage, item string) {
+	if strings.TrimSpace(item) == "" {
+		return
+	}
+	stamped := time.Now().Format("2006-01-02 15:04") + " " + item
+	s.Activity = append([]string{stamped}, s.Activity...)
+	if len(s.Activity) > 50 {
+		s.Activity = s.Activity[:50]
+	}
+}
+
+func firstN(items []string, n int) []string {
+	if n <= 0 || len(items) == 0 {
+		return nil
+	}
+	if len(items) <= n {
+		return append([]string(nil), items...)
+	}
+	return append([]string(nil), items[:n]...)
 }
 
 func parseProjectArg(args []string) (project string, rest []string, err error) {

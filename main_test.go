@@ -55,3 +55,19 @@ func TestCurrentBackURL(t *testing.T) {
 		t.Fatalf("unexpected back url: %s", got)
 	}
 }
+
+func TestAdvanceDueDate(t *testing.T) {
+	next, ok := advanceDueDate("2026-04-15", "weekly")
+	if !ok || next != "2026-04-22" {
+		t.Fatalf("unexpected recurrence shift: ok=%v next=%s", ok, next)
+	}
+}
+
+func TestNormalizeRecurrence(t *testing.T) {
+	if normalizeRecurrence(" DAILY ") != "daily" {
+		t.Fatalf("expected daily normalization")
+	}
+	if normalizeRecurrence("yearly") != "" {
+		t.Fatalf("unsupported recurrence must be empty")
+	}
+}
