@@ -19,6 +19,8 @@ type Todo struct {
 	ID        int       `json:"id"`
 	Text      string    `json:"text"`
 	Project   string    `json:"project"`
+	Priority  int       `json:"priority"`
+	DueDate   string    `json:"due_date"`
 	Done      bool      `json:"done"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -66,7 +68,7 @@ func run(args []string) error {
 			return errors.New("текст задачи не может быть пустым")
 		}
 		nextID := nextID(s.Todos)
-		s.Todos = append(s.Todos, Todo{ID: nextID, Text: text, Project: project, CreatedAt: time.Now()})
+		s.Todos = append(s.Todos, Todo{ID: nextID, Text: text, Project: project, Priority: 4, CreatedAt: time.Now()})
 		if err := save(path, s); err != nil {
 			return err
 		}
@@ -199,52 +201,111 @@ const pageTpl = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TODO на Go</title>
+  <title>Go Todoist-like</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { margin-top: 0; }
-    form { display: flex; gap: .5rem; margin-bottom: 1rem; }
-    input[type=text] { flex: 1; padding: .6rem; }
-    button { padding: .6rem .8rem; cursor: pointer; }
-    ul { list-style: none; padding: 0; }
-    li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .6rem 0; border-bottom: 1px solid #e8e8e8; }
-    .done { text-decoration: line-through; color: #777; }
-    .actions { display: flex; gap: .5rem; }
-    .muted { color: #777; font-size: .9rem; }
+    :root { --bg:#f7f7f7; --card:#fff; --line:#ececec; --text:#202020; --muted:#777; --accent:#dc4c3e; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Inter, system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    .layout { display:grid; grid-template-columns:260px 1fr; min-height:100vh; }
+    .sidebar { background:#fff; border-right:1px solid var(--line); padding:1rem; }
+    .brand { font-weight:700; margin-bottom:1rem; }
+    .nav a { display:flex; justify-content:space-between; text-decoration:none; color:var(--text); padding:.45rem .55rem; border-radius:8px; margin-bottom:.2rem;}
+    .nav a.active, .nav a:hover { background:#f3f3f3; }
+    .projects { margin-top:1rem; }
+    .projects h3 { font-size:.9rem; color:var(--muted); margin:0 0 .4rem; text-transform:uppercase; letter-spacing:.03em; }
+    .main { padding:1.2rem 1.4rem; }
+    .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:1rem; }
+    h1 { margin:.1rem 0 1rem; font-size:1.3rem; }
+    .meta { color:var(--muted); font-size:.85rem; margin-bottom:1rem; }
+    .add { display:grid; grid-template-columns:1fr 170px 120px 110px; gap:.5rem; margin-bottom:.7rem; }
+    input, select, button { padding:.55rem .65rem; border:1px solid #dcdcdc; border-radius:8px; background:#fff; }
+    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    ul { list-style:none; padding:0; margin:0; }
+    li.todo { display:grid; grid-template-columns:1fr auto; gap:.6rem; align-items:center; border-top:1px solid var(--line); padding:.7rem 0; }
+    .left { display:flex; gap:.55rem; align-items:flex-start; }
+    .title.done { text-decoration:line-through; color:var(--muted); }
+    .sub { font-size:.82rem; color:var(--muted); margin-top:.15rem; }
+    .prio { font-weight:600; margin-right:.35rem; }
+    .p1{color:#d1453b}.p2{color:#eb8909}.p3{color:#246fe0}.p4{color:#666}
+    .actions { display:flex; gap:.4rem; }
+    .empty { color:var(--muted); padding:.8rem 0; }
+    .clear { margin-top:.8rem; }
+    @media (max-width: 900px) { .layout { grid-template-columns:1fr; } .sidebar{border-right:none;border-bottom:1px solid var(--line);} .add{grid-template-columns:1fr 1fr;} }
   </style>
 </head>
 <body>
-  <h1>Тудушка на Go</h1>
-  <p class="muted">Хранилище: {{.Path}}</p>
-  <form method="post" action="/add">
-    <input type="text" name="text" placeholder="Новая задача..." required />
-    <input type="text" name="project" placeholder="Проект (например work)" />
-    <button type="submit">Добавить</button>
-  </form>
-  {{if .Todos}}
-  <ul>
-    {{range .Todos}}
-    <li>
-      <span class="{{if .Done}}done{{end}}">#{{.ID}} ({{if .Project}}{{.Project}}{{else}}inbox{{end}}) {{.Text}}</span>
-      <div class="actions">
-        <form method="post" action="/toggle">
-          <input type="hidden" name="id" value="{{.ID}}" />
-          <button type="submit">{{if .Done}}Вернуть{{else}}Готово{{end}}</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">Go Todoist-like</div>
+      <nav class="nav">
+        <a class="{{if eq .View "inbox"}}active{{end}}" href="/?view=inbox"><span>Входящие</span><span>{{.Counts.Inbox}}</span></a>
+        <a class="{{if eq .View "today"}}active{{end}}" href="/?view=today"><span>Сегодня</span><span>{{.Counts.Today}}</span></a>
+        <a class="{{if eq .View "upcoming"}}active{{end}}" href="/?view=upcoming"><span>Предстоящее</span><span>{{.Counts.Upcoming}}</span></a>
+      </nav>
+      <div class="projects">
+        <h3>Проекты</h3>
+        <nav class="nav">
+          {{range .Projects}}
+          <a class="{{if and (eq $.View "project") (eq $.ProjectFilter .)}}active{{end}}" href="/?view=project&project={{.}}"><span>{{.}}</span><span>{{index $.ProjectCounts .}}</span></a>
+          {{end}}
+        </nav>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="panel">
+        <h1>{{.Title}}</h1>
+        <div class="meta">Хранилище: {{.Path}}</div>
+        <form class="add" method="post" action="/add">
+          <input type="text" name="text" placeholder="Что нужно сделать?" required />
+          <input type="text" name="project" placeholder="Проект (по умолчанию inbox)" />
+          <input type="date" name="due_date" />
+          <div style="display:flex;gap:.5rem;">
+            <select name="priority">
+              <option value="4">P4</option>
+              <option value="3">P3</option>
+              <option value="2">P2</option>
+              <option value="1">P1</option>
+            </select>
+            <button class="primary" type="submit">Добавить</button>
+          </div>
         </form>
-        <form method="post" action="/delete">
-          <input type="hidden" name="id" value="{{.ID}}" />
-          <button type="submit">Удалить</button>
+
+        {{if .Todos}}
+        <ul>
+          {{range .Todos}}
+          <li class="todo">
+            <div class="left">
+              <form method="post" action="/toggle">
+                <input type="hidden" name="id" value="{{.ID}}" />
+                <input type="hidden" name="back" value="{{$.BackURL}}" />
+                <button type="submit">{{if .Done}}↩{{else}}✓{{end}}</button>
+              </form>
+              <div>
+                <div class="title {{if .Done}}done{{end}}">{{.Text}}</div>
+                <div class="sub"><span class="prio p{{.Priority}}">P{{.Priority}}</span>Проект: {{if .Project}}{{.Project}}{{else}}inbox{{end}}{{if .DueDate}} · Срок: {{.DueDate}}{{end}}</div>
+              </div>
+            </div>
+            <div class="actions">
+              <form method="post" action="/delete">
+                <input type="hidden" name="id" value="{{.ID}}" />
+                <input type="hidden" name="back" value="{{$.BackURL}}" />
+                <button type="submit">Удалить</button>
+              </form>
+            </div>
+          </li>
+          {{end}}
+        </ul>
+        {{else}}
+        <div class="empty">Задач в этом разделе пока нет.</div>
+        {{end}}
+
+        <form class="clear" method="post" action="/clear">
+          <input type="hidden" name="back" value="{{.BackURL}}" />
+          <button type="submit">Очистить всё</button>
         </form>
       </div>
-    </li>
-    {{end}}
-  </ul>
-  {{else}}
-  <p>Пока задач нет.</p>
-  {{end}}
-  <form method="post" action="/clear">
-    <button type="submit">Очистить всё</button>
-  </form>
+    </main>
+  </div>
 </body>
 </html>`
 
@@ -262,14 +323,37 @@ func runWeb(path string, s *Storage, port string) error {
 		}
 
 		storeMu.Lock()
-		data := struct {
-			Todos []Todo
-			Path  string
-		}{
-			Todos: append([]Todo(nil), s.Todos...),
-			Path:  path,
-		}
+		all := append([]Todo(nil), s.Todos...)
 		storeMu.Unlock()
+		view := strings.TrimSpace(r.URL.Query().Get("view"))
+		if view == "" {
+			view = "inbox"
+		}
+		projectFilter := normalizeProject(r.URL.Query().Get("project"))
+
+		counts, projectCounts := computeCounts(all)
+		filtered := filterTodos(all, view, projectFilter)
+		data := struct {
+			Todos         []Todo
+			Path          string
+			View          string
+			ProjectFilter string
+			Projects      []string
+			Title         string
+			BackURL       string
+			Counts        ViewCounts
+			ProjectCounts map[string]int
+		}{
+			Todos:         filtered,
+			Path:          path,
+			View:          view,
+			ProjectFilter: projectFilter,
+			Projects:      collectProjects(all),
+			Title:         resolveTitle(view, projectFilter),
+			BackURL:       currentBackURL(view, projectFilter),
+			Counts:        counts,
+			ProjectCounts: projectCounts,
+		}
 
 		if err := tpl.Execute(w, data); err != nil {
 			http.Error(w, "template error", http.StatusInternalServerError)
@@ -283,20 +367,25 @@ func runWeb(path string, s *Storage, port string) error {
 		}
 		text := strings.TrimSpace(r.FormValue("text"))
 		project := strings.TrimSpace(r.FormValue("project"))
+		dueDate := strings.TrimSpace(r.FormValue("due_date"))
+		priority := parsePriority(r.FormValue("priority"))
 		if text == "" {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
+		dueDate = normalizeDueDate(dueDate)
 		storeMu.Lock()
 		s.Todos = append(s.Todos, Todo{
 			ID:        nextID(s.Todos),
 			Text:      text,
 			Project:   normalizeProject(project),
+			Priority:  priority,
+			DueDate:   dueDate,
 			CreatedAt: time.Now(),
 		})
 		_ = save(path, s)
 		storeMu.Unlock()
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, backURL(r), http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/toggle", func(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +405,7 @@ func runWeb(path string, s *Storage, port string) error {
 			_ = save(path, s)
 			storeMu.Unlock()
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, backURL(r), http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/delete", func(w http.ResponseWriter, r *http.Request) {
@@ -331,7 +420,7 @@ func runWeb(path string, s *Storage, port string) error {
 			_ = save(path, s)
 			storeMu.Unlock()
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, backURL(r), http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/clear", func(w http.ResponseWriter, r *http.Request) {
@@ -343,12 +432,137 @@ func runWeb(path string, s *Storage, port string) error {
 		s.Todos = nil
 		_ = save(path, s)
 		storeMu.Unlock()
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, backURL(r), http.StatusSeeOther)
 	})
 
 	addr := ":" + port
 	fmt.Printf("Веб-версия запущена: http://localhost%s\n", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+type ViewCounts struct {
+	Inbox    int
+	Today    int
+	Upcoming int
+}
+
+func filterTodos(all []Todo, view, project string) []Todo {
+	out := make([]Todo, 0, len(all))
+	today := todayDate()
+	for _, t := range all {
+		if t.Done {
+			continue
+		}
+		switch view {
+		case "today":
+			if t.DueDate == today {
+				out = append(out, t)
+			}
+		case "upcoming":
+			if isUpcoming(t.DueDate, today) {
+				out = append(out, t)
+			}
+		case "project":
+			if normalizeProject(t.Project) == project {
+				out = append(out, t)
+			}
+		default: // inbox
+			if normalizeProject(t.Project) == "" || normalizeProject(t.Project) == "inbox" {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+func computeCounts(all []Todo) (ViewCounts, map[string]int) {
+	today := todayDate()
+	counts := ViewCounts{}
+	projectCounts := map[string]int{}
+	for _, t := range all {
+		if t.Done {
+			continue
+		}
+		p := projectName(t.Project)
+		projectCounts[p]++
+		if p == "inbox" {
+			counts.Inbox++
+		}
+		if t.DueDate == today {
+			counts.Today++
+		}
+		if isUpcoming(t.DueDate, today) {
+			counts.Upcoming++
+		}
+	}
+	return counts, projectCounts
+}
+
+func resolveTitle(view, project string) string {
+	switch view {
+	case "today":
+		return "Сегодня"
+	case "upcoming":
+		return "Предстоящее"
+	case "project":
+		if project == "" {
+			return "Проект"
+		}
+		return "Проект: " + project
+	default:
+		return "Входящие"
+	}
+}
+
+func currentBackURL(view, project string) string {
+	if view == "project" && project != "" {
+		return "/?view=project&project=" + project
+	}
+	if view == "today" || view == "upcoming" || view == "inbox" {
+		return "/?view=" + view
+	}
+	return "/?view=inbox"
+}
+
+func backURL(r *http.Request) string {
+	back := strings.TrimSpace(r.FormValue("back"))
+	if back == "" || back[0] != '/' {
+		return "/?view=inbox"
+	}
+	return back
+}
+
+func todayDate() string {
+	return time.Now().Format("2006-01-02")
+}
+
+func isUpcoming(dueDate, today string) bool {
+	if dueDate == "" || dueDate <= today {
+		return false
+	}
+	return true
+}
+
+func parsePriority(raw string) int {
+	p, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 4
+	}
+	if p < 1 || p > 4 {
+		return 4
+	}
+	return p
+}
+
+func normalizeDueDate(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if _, err := time.Parse("2006-01-02", raw); err != nil {
+		return ""
+	}
+	return raw
 }
 
 func parseProjectArg(args []string) (project string, rest []string, err error) {
@@ -410,6 +624,11 @@ func load(path string) (*Storage, error) {
 	var s Storage
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("поврежденный файл данных: %w", err)
+	}
+	for i := range s.Todos {
+		if s.Todos[i].Priority < 1 || s.Todos[i].Priority > 4 {
+			s.Todos[i].Priority = 4
+		}
 	}
 	return &s, nil
 }
