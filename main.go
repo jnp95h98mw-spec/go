@@ -396,6 +396,8 @@ const pageTpl = `<!doctype html>
     const energyIcons = ['⚡', '🥤', '🔋', '⚡', '🥤'];
     const cans = [];
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let phonkLoopStarted = false;
+    let phonkTimer = null;
 
     function phonkFx() {
       const now = audioCtx.currentTime;
@@ -434,6 +436,72 @@ const pageTpl = `<!doctype html>
       osc.stop(now + 0.3); sub.stop(now + 0.3);
     }
 
+    function phonkKick(time, freq) {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(freq, time);
+      o.frequency.exponentialRampToValueAtTime(36, time + 0.14);
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.exponentialRampToValueAtTime(0.28, time + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, time + 0.2);
+      o.connect(g);
+      g.connect(audioCtx.destination);
+      o.start(time);
+      o.stop(time + 0.22);
+    }
+
+    function phonkHat(time) {
+      const bufferSize = 2 * audioCtx.sampleRate * 0.03;
+      const noise = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const output = noise.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+      const src = audioCtx.createBufferSource();
+      src.buffer = noise;
+      const hp = audioCtx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 6500;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.12, time);
+      g.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+      src.connect(hp); hp.connect(g); g.connect(audioCtx.destination);
+      src.start(time); src.stop(time + 0.06);
+    }
+
+    function startPhonkLoop() {
+      if (phonkLoopStarted) return;
+      phonkLoopStarted = true;
+      const step = 0.25; // 16th нотка
+      const bpm = 140;
+      const beat = 60 / bpm;
+      let barStep = 0;
+      let next = audioCtx.currentTime + 0.06;
+
+      function schedule() {
+        // Планируем немного наперёд для стабильного бесконечного лупа.
+        while (next < audioCtx.currentTime + 0.12) {
+          const t = next;
+          // Кик-паттерн в стиле фонк.
+          if ([0, 4, 7, 8, 12].includes(barStep % 16)) phonkKick(t, 92);
+          if ([6, 14].includes(barStep % 16)) phonkKick(t, 78);
+          // Хэты почти на каждую долю.
+          if (barStep % 2 === 0) phonkHat(t + 0.01);
+          if (barStep % 4 === 3) phonkHat(t + 0.045);
+          // Периодический саб-акцент.
+          if (barStep % 8 === 0) phonkFx();
+
+          barStep++;
+          next += beat * step;
+        }
+      }
+
+      phonkTimer = setInterval(schedule, 45);
+      schedule();
+      toast.textContent = 'Фонк запущен 🔊';
+      toast.classList.add('show');
+      setTimeout(() => { toast.classList.remove('show'); toast.textContent = 'Сделано ⚡'; }, 1200);
+    }
+
     function randomFx(el) {
       const fxList = ['fx-spin', 'fx-pulse', 'fx-shake', 'fx-rainbow'];
       const fx = fxList[Math.floor(Math.random() * fxList.length)];
@@ -468,6 +536,7 @@ const pageTpl = `<!doctype html>
 
       state.el.addEventListener('click', async () => {
         if (audioCtx.state !== 'running') await audioCtx.resume();
+        startPhonkLoop();
         phonkFx();
         state.vx = randSpeed();
         state.vy = randSpeed();
@@ -500,6 +569,16 @@ const pageTpl = `<!doctype html>
     }
 
     for (let i = 0; i < 10; i++) createCan(i);
+
+    // Браузеры блокируют автозвук — запускаем бесконечный фонк при первом взаимодействии.
+    async function unlockAndStart() {
+      if (audioCtx.state !== 'running') await audioCtx.resume();
+      startPhonkLoop();
+      window.removeEventListener('pointerdown', unlockAndStart);
+      window.removeEventListener('keydown', unlockAndStart);
+    }
+    window.addEventListener('pointerdown', unlockAndStart, { once: true });
+    window.addEventListener('keydown', unlockAndStart, { once: true });
 
     function tick() {
       cans.forEach((c) => {
