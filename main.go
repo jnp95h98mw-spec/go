@@ -320,6 +320,25 @@ const pageTpl = `<!doctype html>
               </div>
             </div>
             <div class="actions">
+              <details>
+                <summary style="cursor:pointer;">Редактировать</summary>
+                <form method="post" action="/edit" style="margin-top:.4rem;display:grid;gap:.35rem;">
+                  <input type="hidden" name="id" value="{{.ID}}" />
+                  <input type="hidden" name="back" value="{{$.BackURL}}" />
+                  <input type="text" name="text" value="{{.Text}}" required />
+                  <input type="text" name="project" value="{{.Project}}" placeholder="Проект" />
+                  <input type="date" name="due_date" value="{{.DueDate}}" />
+                  <select name="priority">
+                    <option value="4" {{if eq .Priority 4}}selected{{end}}>P4</option>
+                    <option value="3" {{if eq .Priority 3}}selected{{end}}>P3</option>
+                    <option value="2" {{if eq .Priority 2}}selected{{end}}>P2</option>
+                    <option value="1" {{if eq .Priority 1}}selected{{end}}>P1</option>
+                  </select>
+                  <input type="text" name="labels" value="{{join .Labels ", "}}" placeholder="Метки через запятую" />
+                  <input type="text" name="note" value="{{.Note}}" placeholder="Описание" />
+                  <button type="submit">Сохранить</button>
+                </form>
+              </details>
               <form method="post" action="/delete">
                 <input type="hidden" name="id" value="{{.ID}}" />
                 <input type="hidden" name="back" value="{{$.BackURL}}" />
@@ -343,7 +362,7 @@ const pageTpl = `<!doctype html>
   <div id="toast" class="toast">Сделано ⚡</div>
   <script>
     const toast = document.getElementById('toast');
-    document.querySelectorAll('form[action="/add"],form[action="/toggle"],form[action="/delete"],form[action="/clear"]').forEach((f) => {
+    document.querySelectorAll('form[action="/add"],form[action="/toggle"],form[action="/delete"],form[action="/clear"],form[action="/edit"]').forEach((f) => {
       f.addEventListener('submit', () => {
         toast.classList.add('show');
         setTimeout(() => toast.classList.remove('show'), 900);
@@ -362,6 +381,7 @@ func runWeb(path string, s *Storage, port string) error {
 			}
 			return sum
 		},
+		"join": strings.Join,
 	}).Parse(pageTpl)
 	if err != nil {
 		return fmt.Errorf("не удалось подготовить шаблон страницы: %w", err)
@@ -479,6 +499,35 @@ func runWeb(path string, s *Storage, port string) error {
 		if err == nil {
 			storeMu.Lock()
 			_ = removeTodo(s, id)
+			_ = save(path, s)
+			storeMu.Unlock()
+		}
+		http.Redirect(w, r, backURL(r), http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("/edit", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.Atoi(r.FormValue("id"))
+		if err == nil {
+			storeMu.Lock()
+			for i := range s.Todos {
+				if s.Todos[i].ID != id {
+					continue
+				}
+				text := strings.TrimSpace(r.FormValue("text"))
+				if text != "" {
+					s.Todos[i].Text = text
+				}
+				s.Todos[i].Project = normalizeProject(r.FormValue("project"))
+				s.Todos[i].Note = strings.TrimSpace(r.FormValue("note"))
+				s.Todos[i].Labels = parseLabels(r.FormValue("labels"))
+				s.Todos[i].Priority = parsePriority(r.FormValue("priority"))
+				s.Todos[i].DueDate = normalizeDueDate(r.FormValue("due_date"))
+				break
+			}
 			_ = save(path, s)
 			storeMu.Unlock()
 		}
