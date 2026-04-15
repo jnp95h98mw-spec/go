@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,8 @@ import (
 type Todo struct {
 	ID        int       `json:"id"`
 	Text      string    `json:"text"`
+	Note      string    `json:"note"`
+	Labels    []string  `json:"labels"`
 	Project   string    `json:"project"`
 	Priority  int       `json:"priority"`
 	DueDate   string    `json:"due_date"`
@@ -256,6 +259,8 @@ const pageTpl = `<!doctype html>
         <a class="{{if eq .View "inbox"}}active{{end}}" href="/?view=inbox"><span>Входящие</span><span>{{.Counts.Inbox}}</span></a>
         <a class="{{if eq .View "today"}}active{{end}}" href="/?view=today"><span>Сегодня</span><span>{{.Counts.Today}}</span></a>
         <a class="{{if eq .View "upcoming"}}active{{end}}" href="/?view=upcoming"><span>Предстоящее</span><span>{{.Counts.Upcoming}}</span></a>
+        <a class="{{if eq .View "overdue"}}active{{end}}" href="/?view=overdue"><span>Просроченные</span><span>{{.Counts.Overdue}}</span></a>
+        <a class="{{if and (eq .View "inbox") .ShowDone}}active{{end}}" href="/?view=inbox&show_done=1"><span>Выполненные</span><span>{{.Counts.Done}}</span></a>
       </nav>
       <div class="projects">
         <h3>Проекты</h3>
@@ -274,6 +279,11 @@ const pageTpl = `<!doctype html>
           <span class="chip">Активные: <strong>{{add .Counts.Inbox .Counts.Today .Counts.Upcoming}}</strong></span>
           <span class="chip">Текущий вид: <span class="pill">{{.View}}</span></span>
         </div>
+        <form class="add" method="get" action="/" style="margin-bottom:.9rem;grid-template-columns:1fr 150px;">
+          <input type="hidden" name="view" value="{{.View}}" />
+          <input type="text" name="q" value="{{.Query}}" placeholder="Поиск задач..." />
+          <button type="submit">Поиск</button>
+        </form>
         <form class="add" method="post" action="/add">
           <input type="text" name="text" placeholder="Что нужно сделать?" required />
           <input type="text" name="project" placeholder="Проект (по умолчанию inbox)" />
@@ -287,6 +297,9 @@ const pageTpl = `<!doctype html>
             </select>
             <button class="primary" type="submit">Добавить</button>
           </div>
+          <input type="text" name="labels" placeholder="Метки через запятую: work,urgent" />
+          <input type="text" name="note" placeholder="Описание / комментарий" />
+          <input type="hidden" name="back" value="{{.BackURL}}" />
         </form>
 
         {{if .Todos}}
@@ -302,6 +315,8 @@ const pageTpl = `<!doctype html>
               <div>
                 <div class="title {{if .Done}}done{{end}}">{{.Text}}</div>
                 <div class="sub"><span class="prio p{{.Priority}}">P{{.Priority}}</span>Проект: {{if .Project}}{{.Project}}{{else}}inbox{{end}}{{if .DueDate}} · Срок: {{.DueDate}}{{end}}</div>
+                {{if .Labels}}<div class="sub">🏷️ {{range $i, $l := .Labels}}{{if $i}}, {{end}}{{$l}}{{end}}</div>{{end}}
+                {{if .Note}}<div class="sub">📝 {{.Note}}</div>{{end}}
               </div>
             </div>
             <div class="actions">
@@ -366,14 +381,18 @@ func runWeb(path string, s *Storage, port string) error {
 		if view == "" {
 			view = "inbox"
 		}
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
+		showDone := r.URL.Query().Get("show_done") == "1"
 		projectFilter := normalizeProject(r.URL.Query().Get("project"))
 
 		counts, projectCounts := computeCounts(all)
-		filtered := filterTodos(all, view, projectFilter)
+		filtered := filterTodos(all, view, projectFilter, showDone, query)
 		data := struct {
 			Todos         []Todo
 			Path          string
 			View          string
+			Query         string
+			ShowDone      bool
 			ProjectFilter string
 			Projects      []string
 			Title         string
@@ -384,10 +403,12 @@ func runWeb(path string, s *Storage, port string) error {
 			Todos:         filtered,
 			Path:          path,
 			View:          view,
+			Query:         query,
+			ShowDone:      showDone,
 			ProjectFilter: projectFilter,
 			Projects:      collectProjects(all),
 			Title:         resolveTitle(view, projectFilter),
-			BackURL:       currentBackURL(view, projectFilter),
+			BackURL:       currentBackURL(view, projectFilter, showDone, query),
 			Counts:        counts,
 			ProjectCounts: projectCounts,
 		}
@@ -406,6 +427,8 @@ func runWeb(path string, s *Storage, port string) error {
 		project := strings.TrimSpace(r.FormValue("project"))
 		dueDate := strings.TrimSpace(r.FormValue("due_date"))
 		priority := parsePriority(r.FormValue("priority"))
+		note := strings.TrimSpace(r.FormValue("note"))
+		labels := parseLabels(r.FormValue("labels"))
 		if text == "" {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
@@ -415,6 +438,8 @@ func runWeb(path string, s *Storage, port string) error {
 		s.Todos = append(s.Todos, Todo{
 			ID:        nextID(s.Todos),
 			Text:      text,
+			Note:      note,
+			Labels:    labels,
 			Project:   normalizeProject(project),
 			Priority:  priority,
 			DueDate:   dueDate,
@@ -481,13 +506,19 @@ type ViewCounts struct {
 	Inbox    int
 	Today    int
 	Upcoming int
+	Overdue  int
+	Done     int
 }
 
-func filterTodos(all []Todo, view, project string) []Todo {
+func filterTodos(all []Todo, view, project string, showDone bool, query string) []Todo {
 	out := make([]Todo, 0, len(all))
 	today := todayDate()
+	q := strings.ToLower(strings.TrimSpace(query))
 	for _, t := range all {
-		if t.Done {
+		if !showDone && t.Done {
+			continue
+		}
+		if q != "" && !matchesQuery(t, q) {
 			continue
 		}
 		switch view {
@@ -497,6 +528,10 @@ func filterTodos(all []Todo, view, project string) []Todo {
 			}
 		case "upcoming":
 			if isUpcoming(t.DueDate, today) {
+				out = append(out, t)
+			}
+		case "overdue":
+			if isOverdue(t.DueDate, today) {
 				out = append(out, t)
 			}
 		case "project":
@@ -518,6 +553,7 @@ func computeCounts(all []Todo) (ViewCounts, map[string]int) {
 	projectCounts := map[string]int{}
 	for _, t := range all {
 		if t.Done {
+			counts.Done++
 			continue
 		}
 		p := projectName(t.Project)
@@ -531,6 +567,9 @@ func computeCounts(all []Todo) (ViewCounts, map[string]int) {
 		if isUpcoming(t.DueDate, today) {
 			counts.Upcoming++
 		}
+		if isOverdue(t.DueDate, today) {
+			counts.Overdue++
+		}
 	}
 	return counts, projectCounts
 }
@@ -541,6 +580,8 @@ func resolveTitle(view, project string) string {
 		return "Сегодня"
 	case "upcoming":
 		return "Предстоящее"
+	case "overdue":
+		return "Просроченные"
 	case "project":
 		if project == "" {
 			return "Проект"
@@ -551,14 +592,24 @@ func resolveTitle(view, project string) string {
 	}
 }
 
-func currentBackURL(view, project string) string {
+func currentBackURL(view, project string, showDone bool, query string) string {
+	params := make([]string, 0, 3)
+	if view != "" {
+		params = append(params, "view="+url.QueryEscape(view))
+	}
 	if view == "project" && project != "" {
-		return "/?view=project&project=" + project
+		params = append(params, "project="+url.QueryEscape(project))
 	}
-	if view == "today" || view == "upcoming" || view == "inbox" {
-		return "/?view=" + view
+	if showDone {
+		params = append(params, "show_done=1")
 	}
-	return "/?view=inbox"
+	if query != "" {
+		params = append(params, "q="+url.QueryEscape(query))
+	}
+	if len(params) == 0 {
+		return "/?view=inbox"
+	}
+	return "/?" + strings.Join(params, "&")
 }
 
 func backURL(r *http.Request) string {
@@ -578,6 +629,48 @@ func isUpcoming(dueDate, today string) bool {
 		return false
 	}
 	return true
+}
+
+func isOverdue(dueDate, today string) bool {
+	if dueDate == "" {
+		return false
+	}
+	return dueDate < today
+}
+
+func matchesQuery(t Todo, q string) bool {
+	if strings.Contains(strings.ToLower(t.Text), q) || strings.Contains(strings.ToLower(t.Note), q) {
+		return true
+	}
+	for _, l := range t.Labels {
+		if strings.Contains(strings.ToLower(l), q) {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(projectName(t.Project)), q)
+}
+
+func parseLabels(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	items := strings.Split(raw, ",")
+	seen := map[string]struct{}{}
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		l := strings.TrimSpace(strings.ToLower(item))
+		if l == "" {
+			continue
+		}
+		if _, ok := seen[l]; ok {
+			continue
+		}
+		seen[l] = struct{}{}
+		labels = append(labels, l)
+	}
+	sort.Strings(labels)
+	return labels
 }
 
 func parsePriority(raw string) int {
