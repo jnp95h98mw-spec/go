@@ -246,18 +246,25 @@ const pageTpl = `<!doctype html>
     .toast.show { opacity:1; transform:translateY(0); }
     .done-btn{border-color:rgba(89,213,143,.35);}
     .delete-btn{border-color:rgba(255,94,125,.35);}
-    .beer-bottle {
+    .energy {
       position: fixed;
       left: 20px;
       top: 20px;
       z-index: 1;
-      font-size: 48px;
+      font-size: 44px;
       user-select: none;
       cursor: grab;
       filter: drop-shadow(0 8px 18px rgba(0,0,0,.35));
       transition: transform .15s ease;
     }
-    .beer-bottle:active { cursor: grabbing; transform: scale(1.08); }
+    .energy:active { cursor: grabbing; transform: scale(1.08); }
+    .fx-spin { animation: fxspin .8s linear; }
+    .fx-pulse { animation: fxpulse .5s ease-in-out 2; }
+    .fx-shake { animation: fxshake .35s ease-in-out 2; }
+    .fx-rainbow { filter: hue-rotate(280deg) drop-shadow(0 8px 18px rgba(103,255,214,.45)); }
+    @keyframes fxspin { from { transform: rotate(0deg) scale(1);} to { transform: rotate(720deg) scale(1.15);} }
+    @keyframes fxpulse { 0%{transform:scale(1)} 50%{transform:scale(1.25)} 100%{transform:scale(1)} }
+    @keyframes fxshake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
     @keyframes panelIn { from { opacity:0; transform:translateY(8px);} to {opacity:1; transform:none;} }
     @keyframes itemIn { from { opacity:0; transform:translateY(6px);} to {opacity:1; transform:none;} }
     @media (max-width: 900px) { .layout { grid-template-columns:1fr; } .sidebar{border-right:none;border-bottom:1px solid var(--line);} .add{grid-template-columns:1fr 1fr;} }
@@ -371,7 +378,7 @@ const pageTpl = `<!doctype html>
       </div>
     </main>
   </div>
-  <div id="beerBottle" class="beer-bottle" title="Потяни или кликни меня">🍾</div>
+  <div id="energyLayer"></div>
   <div id="toast" class="toast">Сделано ⚡</div>
   <script>
     const toast = document.getElementById('toast');
@@ -382,86 +389,139 @@ const pageTpl = `<!doctype html>
       });
     });
 
-    // Интерактивная бутылка на фоне: случайное направление, отскоки от краёв, drag-and-drop.
-    const bottle = document.getElementById('beerBottle');
-    let bx = 40;
-    let by = 40;
-    let vx = (Math.random() * 2 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
-    let vy = (Math.random() * 2 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
-    let dragging = false;
-    let offsetX = 0;
-    let offsetY = 0;
-    let spin = 0;
-
+    // 10 интерактивных энергетиков с рандомными эффектами и фонк-басс саундом.
+    const layer = document.getElementById('energyLayer');
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-    const randSpeed = () => (Math.random() * 2.5 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
+    const randSpeed = () => (Math.random() * 2.7 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
+    const energyIcons = ['⚡', '🥤', '🔋', '⚡', '🥤'];
+    const cans = [];
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    function positionBottle() {
-      bottle.style.left = bx + 'px';
-      bottle.style.top = by + 'px';
-      bottle.style.transform = 'rotate(' + spin + 'deg)';
+    function phonkFx() {
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const sub = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const lowpass = audioCtx.createBiquadFilter();
+      const drive = audioCtx.createWaveShaper();
+
+      lowpass.type = 'lowpass';
+      lowpass.frequency.value = 220;
+
+      drive.curve = new Float32Array(256).map((_, i) => {
+        const x = (i * 2) / 255 - 1;
+        return Math.tanh(3.5 * x);
+      });
+
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(62, now);
+      osc.frequency.exponentialRampToValueAtTime(42, now + 0.18);
+      sub.type = 'sine';
+      sub.frequency.setValueAtTime(41, now);
+      sub.frequency.exponentialRampToValueAtTime(31, now + 0.2);
+
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.23, now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
+
+      osc.connect(drive);
+      sub.connect(drive);
+      drive.connect(lowpass);
+      lowpass.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start(now); sub.start(now);
+      osc.stop(now + 0.3); sub.stop(now + 0.3);
     }
+
+    function randomFx(el) {
+      const fxList = ['fx-spin', 'fx-pulse', 'fx-shake', 'fx-rainbow'];
+      const fx = fxList[Math.floor(Math.random() * fxList.length)];
+      el.classList.add(fx);
+      setTimeout(() => el.classList.remove(fx), 900);
+    }
+
+    function createCan(i) {
+      const el = document.createElement('div');
+      el.className = 'energy';
+      el.textContent = energyIcons[i % energyIcons.length];
+      el.title = 'Энергетик #' + (i + 1) + ' — кликни или перетащи';
+      layer.appendChild(el);
+
+      const state = {
+        el,
+        x: Math.random() * Math.max(10, window.innerWidth - 100),
+        y: Math.random() * Math.max(10, window.innerHeight - 100),
+        vx: randSpeed(),
+        vy: randSpeed(),
+        spin: Math.random() * 180,
+        dragging: false,
+        ox: 0,
+        oy: 0,
+      };
+
+      function render() {
+        state.el.style.left = state.x + 'px';
+        state.el.style.top = state.y + 'px';
+        state.el.style.transform = 'rotate(' + state.spin + 'deg)';
+      }
+
+      state.el.addEventListener('click', async () => {
+        if (audioCtx.state !== 'running') await audioCtx.resume();
+        phonkFx();
+        state.vx = randSpeed();
+        state.vy = randSpeed();
+        randomFx(state.el);
+        toast.textContent = 'Энергетик бустанулся ⚡';
+        toast.classList.add('show');
+        setTimeout(() => { toast.classList.remove('show'); toast.textContent = 'Сделано ⚡'; }, 900);
+      });
+
+      state.el.addEventListener('pointerdown', (e) => {
+        state.dragging = true;
+        state.el.setPointerCapture(e.pointerId);
+        state.ox = e.clientX - state.x;
+        state.oy = e.clientY - state.y;
+      });
+      state.el.addEventListener('pointermove', (e) => {
+        if (!state.dragging) return;
+        state.x = clamp(e.clientX - state.ox, 0, window.innerWidth - state.el.offsetWidth - 4);
+        state.y = clamp(e.clientY - state.oy, 0, window.innerHeight - state.el.offsetHeight - 4);
+        render();
+      });
+      state.el.addEventListener('pointerup', () => {
+        state.dragging = false;
+        state.vx = randSpeed();
+        state.vy = randSpeed();
+      });
+
+      state.render = render;
+      cans.push(state);
+    }
+
+    for (let i = 0; i < 10; i++) createCan(i);
 
     function tick() {
-      if (!dragging) {
-        bx += vx;
-        by += vy;
-        spin += (Math.abs(vx) + Math.abs(vy)) * 0.1;
-
-        const maxX = window.innerWidth - bottle.offsetWidth - 4;
-        const maxY = window.innerHeight - bottle.offsetHeight - 4;
-
-        if (bx <= 0 || bx >= maxX) {
-          vx *= -1;
-          vx += (Math.random() - 0.5) * 0.6;
-          bx = clamp(bx, 0, maxX);
+      cans.forEach((c) => {
+        if (!c.dragging) {
+          c.x += c.vx;
+          c.y += c.vy;
+          c.spin += (Math.abs(c.vx) + Math.abs(c.vy)) * 0.12;
+          const maxX = window.innerWidth - c.el.offsetWidth - 4;
+          const maxY = window.innerHeight - c.el.offsetHeight - 4;
+          if (c.x <= 0 || c.x >= maxX) { c.vx *= -1; c.vx += (Math.random() - 0.5) * 0.7; c.x = clamp(c.x, 0, maxX); }
+          if (c.y <= 0 || c.y >= maxY) { c.vy *= -1; c.vy += (Math.random() - 0.5) * 0.7; c.y = clamp(c.y, 0, maxY); }
+          c.render();
         }
-        if (by <= 0 || by >= maxY) {
-          vy *= -1;
-          vy += (Math.random() - 0.5) * 0.6;
-          by = clamp(by, 0, maxY);
-        }
-        positionBottle();
-      }
+      });
       requestAnimationFrame(tick);
     }
-
-    bottle.addEventListener('click', () => {
-      vx = randSpeed();
-      vy = randSpeed();
-      toast.textContent = 'Новый вектор 🍾';
-      toast.classList.add('show');
-      setTimeout(() => {
-        toast.classList.remove('show');
-        toast.textContent = 'Сделано ⚡';
-      }, 900);
-    });
-
-    bottle.addEventListener('pointerdown', (e) => {
-      dragging = true;
-      bottle.setPointerCapture(e.pointerId);
-      offsetX = e.clientX - bx;
-      offsetY = e.clientY - by;
-    });
-    bottle.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      bx = clamp(e.clientX - offsetX, 0, window.innerWidth - bottle.offsetWidth - 4);
-      by = clamp(e.clientY - offsetY, 0, window.innerHeight - bottle.offsetHeight - 4);
-      positionBottle();
-    });
-    bottle.addEventListener('pointerup', () => {
-      dragging = false;
-      vx = randSpeed();
-      vy = randSpeed();
-    });
-
-    window.addEventListener('resize', () => {
-      bx = clamp(bx, 0, window.innerWidth - bottle.offsetWidth - 4);
-      by = clamp(by, 0, window.innerHeight - bottle.offsetHeight - 4);
-      positionBottle();
-    });
-
-    positionBottle();
+    window.addEventListener('resize', () => cans.forEach((c) => {
+      c.x = clamp(c.x, 0, window.innerWidth - c.el.offsetWidth - 4);
+      c.y = clamp(c.y, 0, window.innerHeight - c.el.offsetHeight - 4);
+      c.render();
+    }));
+    cans.forEach((c) => c.render());
     requestAnimationFrame(tick);
   </script>
 </body>
