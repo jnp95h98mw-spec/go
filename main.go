@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 type Todo struct {
 	ID        int       `json:"id"`
 	Text      string    `json:"text"`
+	Project   string    `json:"project"`
 	Done      bool      `json:"done"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -53,30 +55,55 @@ func run(args []string) error {
 	switch args[0] {
 	case "add":
 		if len(args) < 2 {
-			return errors.New("укажите текст задачи: todo add \"Купить молоко\"")
+			return errors.New("укажите текст задачи: todo add [--project <название>] \"Купить молоко\"")
 		}
-		text := strings.TrimSpace(strings.Join(args[1:], " "))
+		project, rest, err := parseProjectArg(args[1:])
+		if err != nil {
+			return err
+		}
+		text := strings.TrimSpace(strings.Join(rest, " "))
 		if text == "" {
 			return errors.New("текст задачи не может быть пустым")
 		}
 		nextID := nextID(s.Todos)
-		s.Todos = append(s.Todos, Todo{ID: nextID, Text: text, CreatedAt: time.Now()})
+		s.Todos = append(s.Todos, Todo{ID: nextID, Text: text, Project: project, CreatedAt: time.Now()})
 		if err := save(path, s); err != nil {
 			return err
 		}
-		fmt.Printf("Добавлено: [%d] %s\n", nextID, text)
+		if project == "" {
+			project = "inbox"
+		}
+		fmt.Printf("Добавлено: [%d] (%s) %s\n", nextID, project, text)
 
 	case "list":
+		filterProject := ""
+		if len(args) == 2 {
+			filterProject = strings.TrimSpace(args[1])
+		}
 		if len(s.Todos) == 0 {
 			fmt.Println("Список задач пуст")
 			return nil
 		}
 		for _, t := range s.Todos {
+			if filterProject != "" && normalizeProject(t.Project) != normalizeProject(filterProject) {
+				continue
+			}
 			mark := " "
 			if t.Done {
 				mark = "x"
 			}
-			fmt.Printf("[%s] %d. %s\n", mark, t.ID, t.Text)
+			fmt.Printf("[%s] %d. (%s) %s\n", mark, t.ID, projectName(t.Project), t.Text)
+		}
+
+	case "projects":
+		projects := collectProjects(s.Todos)
+		if len(projects) == 0 {
+			fmt.Println("Проектов пока нет")
+			return nil
+		}
+		fmt.Println("Проекты:")
+		for _, p := range projects {
+			fmt.Printf("- %s\n", p)
 		}
 
 	case "done":
@@ -156,7 +183,9 @@ func printHelp() {
 	fmt.Println("Терминальная TODO на Go")
 	fmt.Println("\nКоманды:")
 	fmt.Println("  add <текст>     Добавить задачу")
-	fmt.Println("  list            Показать задачи")
+	fmt.Println("  add --project P Добавить задачу в проект P")
+	fmt.Println("  list [проект]   Показать задачи (или по проекту)")
+	fmt.Println("  projects        Список проектов")
 	fmt.Println("  done <id>       Отметить как выполненную")
 	fmt.Println("  undone <id>     Снять отметку выполнения")
 	fmt.Println("  rm <id>         Удалить задачу")
@@ -189,13 +218,14 @@ const pageTpl = `<!doctype html>
   <p class="muted">Хранилище: {{.Path}}</p>
   <form method="post" action="/add">
     <input type="text" name="text" placeholder="Новая задача..." required />
+    <input type="text" name="project" placeholder="Проект (например work)" />
     <button type="submit">Добавить</button>
   </form>
   {{if .Todos}}
   <ul>
     {{range .Todos}}
     <li>
-      <span class="{{if .Done}}done{{end}}">#{{.ID}} {{.Text}}</span>
+      <span class="{{if .Done}}done{{end}}">#{{.ID}} ({{if .Project}}{{.Project}}{{else}}inbox{{end}}) {{.Text}}</span>
       <div class="actions">
         <form method="post" action="/toggle">
           <input type="hidden" name="id" value="{{.ID}}" />
@@ -252,6 +282,7 @@ func runWeb(path string, s *Storage, port string) error {
 			return
 		}
 		text := strings.TrimSpace(r.FormValue("text"))
+		project := strings.TrimSpace(r.FormValue("project"))
 		if text == "" {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
@@ -260,6 +291,7 @@ func runWeb(path string, s *Storage, port string) error {
 		s.Todos = append(s.Todos, Todo{
 			ID:        nextID(s.Todos),
 			Text:      text,
+			Project:   normalizeProject(project),
 			CreatedAt: time.Now(),
 		})
 		_ = save(path, s)
@@ -317,6 +349,41 @@ func runWeb(path string, s *Storage, port string) error {
 	addr := ":" + port
 	fmt.Printf("Веб-версия запущена: http://localhost%s\n", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+func parseProjectArg(args []string) (project string, rest []string, err error) {
+	if len(args) >= 2 && (args[0] == "--project" || args[0] == "-p") {
+		project = strings.TrimSpace(args[1])
+		if project == "" {
+			return "", nil, errors.New("название проекта не может быть пустым")
+		}
+		return normalizeProject(project), args[2:], nil
+	}
+	return "", args, nil
+}
+
+func normalizeProject(project string) string {
+	return strings.TrimSpace(strings.ToLower(project))
+}
+
+func projectName(project string) string {
+	if strings.TrimSpace(project) == "" {
+		return "inbox"
+	}
+	return project
+}
+
+func collectProjects(todos []Todo) []string {
+	seen := map[string]struct{}{}
+	for _, t := range todos {
+		seen[projectName(t.Project)] = struct{}{}
+	}
+	projects := make([]string, 0, len(seen))
+	for p := range seen {
+		projects = append(projects, p)
+	}
+	sort.Strings(projects)
+	return projects
 }
 
 func dataPath() (string, error) {
