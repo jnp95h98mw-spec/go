@@ -201,42 +201,57 @@ const pageTpl = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Go Todoist-like</title>
+  <title>TaskFlow Pro</title>
   <style>
-    :root { --bg:#f7f7f7; --card:#fff; --line:#ececec; --text:#202020; --muted:#777; --accent:#dc4c3e; }
+    :root { --bg:#0f1222; --bg2:#171a2b; --card:rgba(255,255,255,.06); --line:rgba(255,255,255,.11); --text:#eef1ff; --muted:#9ea5d1; --accent:#7c5cff; --accent2:#34d1bf; --danger:#ff5e7d; --ok:#59d58f; }
     * { box-sizing: border-box; }
-    body { margin:0; font-family: Inter, system-ui, sans-serif; background:var(--bg); color:var(--text); }
-    .layout { display:grid; grid-template-columns:260px 1fr; min-height:100vh; }
-    .sidebar { background:#fff; border-right:1px solid var(--line); padding:1rem; }
-    .brand { font-weight:700; margin-bottom:1rem; }
-    .nav a { display:flex; justify-content:space-between; text-decoration:none; color:var(--text); padding:.45rem .55rem; border-radius:8px; margin-bottom:.2rem;}
-    .nav a.active, .nav a:hover { background:#f3f3f3; }
+    html, body { height: 100%; }
+    body { margin:0; font-family: Inter, system-ui, sans-serif; background:radial-gradient(circle at 20% -10%, #2d1f55 0%, transparent 40%), radial-gradient(circle at 80% 120%, #123d46 0%, transparent 40%), var(--bg); color:var(--text); }
+    .layout { display:grid; grid-template-columns:280px 1fr; min-height:100vh; backdrop-filter: blur(4px); }
+    .sidebar { background:linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.04)); border-right:1px solid var(--line); padding:1.1rem; }
+    .brand { font-weight:800; margin-bottom:1rem; letter-spacing:.02em; display:flex; align-items:center; gap:.5rem;}
+    .brand .dot{width:10px;height:10px;border-radius:99px;background:linear-gradient(120deg,var(--accent),var(--accent2));box-shadow:0 0 16px var(--accent);}
+    .nav a { display:flex; justify-content:space-between; text-decoration:none; color:var(--text); padding:.52rem .6rem; border-radius:10px; margin-bottom:.25rem; transition: .2s ease;}
+    .nav a.active, .nav a:hover { background:rgba(255,255,255,.1); transform: translateX(2px); }
     .projects { margin-top:1rem; }
     .projects h3 { font-size:.9rem; color:var(--muted); margin:0 0 .4rem; text-transform:uppercase; letter-spacing:.03em; }
-    .main { padding:1.2rem 1.4rem; }
-    .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:1rem; }
+    .main { padding:1.4rem; }
+    .panel { background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04)); border:1px solid var(--line); border-radius:16px; padding:1.1rem; box-shadow: 0 20px 50px rgba(0,0,0,.25); animation: panelIn .5s ease;}
     h1 { margin:.1rem 0 1rem; font-size:1.3rem; }
     .meta { color:var(--muted); font-size:.85rem; margin-bottom:1rem; }
     .add { display:grid; grid-template-columns:1fr 170px 120px 110px; gap:.5rem; margin-bottom:.7rem; }
-    input, select, button { padding:.55rem .65rem; border:1px solid #dcdcdc; border-radius:8px; background:#fff; }
-    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    input, select, button { padding:.62rem .7rem; border:1px solid var(--line); border-radius:10px; background:rgba(255,255,255,.05); color:var(--text); transition:.2s ease; }
+    input:focus, select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(124,92,255,.25); }
+    button { cursor:pointer; }
+    button:hover { transform: translateY(-1px); }
+    button.primary { background:linear-gradient(120deg,var(--accent),#5f9dff); color:#fff; border:none; font-weight:700; }
+    button.primary:hover { box-shadow:0 8px 24px rgba(124,92,255,.35); }
     ul { list-style:none; padding:0; margin:0; }
-    li.todo { display:grid; grid-template-columns:1fr auto; gap:.6rem; align-items:center; border-top:1px solid var(--line); padding:.7rem 0; }
+    li.todo { display:grid; grid-template-columns:1fr auto; gap:.6rem; align-items:center; border-top:1px solid var(--line); padding:.8rem 0; animation: itemIn .35s ease both; }
     .left { display:flex; gap:.55rem; align-items:flex-start; }
     .title.done { text-decoration:line-through; color:var(--muted); }
     .sub { font-size:.82rem; color:var(--muted); margin-top:.15rem; }
     .prio { font-weight:600; margin-right:.35rem; }
-    .p1{color:#d1453b}.p2{color:#eb8909}.p3{color:#246fe0}.p4{color:#666}
+    .p1{color:#ff7c93}.p2{color:#ffc857}.p3{color:#6ab7ff}.p4{color:#c8cbe5}
     .actions { display:flex; gap:.4rem; }
     .empty { color:var(--muted); padding:.8rem 0; }
     .clear { margin-top:.8rem; }
+    .chip { display:inline-flex; align-items:center; gap:.35rem; border:1px solid var(--line); border-radius:999px; padding:.25rem .55rem; font-size:.78rem; color:var(--muted); }
+    .pill { font-size:.75rem; font-weight:700; color:#fff; background:linear-gradient(120deg,#2bcf9c,#32d2ff); border-radius:999px; padding:.15rem .45rem; }
+    .statrow { display:flex; gap:.5rem; margin-bottom:.75rem; flex-wrap:wrap; }
+    .toast { position:fixed; right:1rem; bottom:1rem; background:rgba(35,38,60,.95); border:1px solid var(--line); color:var(--text); padding:.7rem .85rem; border-radius:10px; opacity:0; transform:translateY(10px); transition:.25s ease; pointer-events:none; }
+    .toast.show { opacity:1; transform:translateY(0); }
+    .done-btn{border-color:rgba(89,213,143,.35);}
+    .delete-btn{border-color:rgba(255,94,125,.35);}
+    @keyframes panelIn { from { opacity:0; transform:translateY(8px);} to {opacity:1; transform:none;} }
+    @keyframes itemIn { from { opacity:0; transform:translateY(6px);} to {opacity:1; transform:none;} }
     @media (max-width: 900px) { .layout { grid-template-columns:1fr; } .sidebar{border-right:none;border-bottom:1px solid var(--line);} .add{grid-template-columns:1fr 1fr;} }
   </style>
 </head>
 <body>
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand">Go Todoist-like</div>
+      <div class="brand"><span class="dot"></span>TaskFlow Pro</div>
       <nav class="nav">
         <a class="{{if eq .View "inbox"}}active{{end}}" href="/?view=inbox"><span>Входящие</span><span>{{.Counts.Inbox}}</span></a>
         <a class="{{if eq .View "today"}}active{{end}}" href="/?view=today"><span>Сегодня</span><span>{{.Counts.Today}}</span></a>
@@ -255,6 +270,10 @@ const pageTpl = `<!doctype html>
       <div class="panel">
         <h1>{{.Title}}</h1>
         <div class="meta">Хранилище: {{.Path}}</div>
+        <div class="statrow">
+          <span class="chip">Активные: <strong>{{add .Counts.Inbox .Counts.Today .Counts.Upcoming}}</strong></span>
+          <span class="chip">Текущий вид: <span class="pill">{{.View}}</span></span>
+        </div>
         <form class="add" method="post" action="/add">
           <input type="text" name="text" placeholder="Что нужно сделать?" required />
           <input type="text" name="project" placeholder="Проект (по умолчанию inbox)" />
@@ -278,7 +297,7 @@ const pageTpl = `<!doctype html>
               <form method="post" action="/toggle">
                 <input type="hidden" name="id" value="{{.ID}}" />
                 <input type="hidden" name="back" value="{{$.BackURL}}" />
-                <button type="submit">{{if .Done}}↩{{else}}✓{{end}}</button>
+                <button class="done-btn" type="submit">{{if .Done}}↩{{else}}✓{{end}}</button>
               </form>
               <div>
                 <div class="title {{if .Done}}done{{end}}">{{.Text}}</div>
@@ -289,7 +308,7 @@ const pageTpl = `<!doctype html>
               <form method="post" action="/delete">
                 <input type="hidden" name="id" value="{{.ID}}" />
                 <input type="hidden" name="back" value="{{$.BackURL}}" />
-                <button type="submit">Удалить</button>
+                <button class="delete-btn" type="submit">Удалить</button>
               </form>
             </div>
           </li>
@@ -306,11 +325,29 @@ const pageTpl = `<!doctype html>
       </div>
     </main>
   </div>
+  <div id="toast" class="toast">Сделано ⚡</div>
+  <script>
+    const toast = document.getElementById('toast');
+    document.querySelectorAll('form[action="/add"],form[action="/toggle"],form[action="/delete"],form[action="/clear"]').forEach((f) => {
+      f.addEventListener('submit', () => {
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 900);
+      });
+    });
+  </script>
 </body>
 </html>`
 
 func runWeb(path string, s *Storage, port string) error {
-	tpl, err := template.New("page").Parse(pageTpl)
+	tpl, err := template.New("page").Funcs(template.FuncMap{
+		"add": func(v ...int) int {
+			sum := 0
+			for _, n := range v {
+				sum += n
+			}
+			return sum
+		},
+	}).Parse(pageTpl)
 	if err != nil {
 		return fmt.Errorf("не удалось подготовить шаблон страницы: %w", err)
 	}
